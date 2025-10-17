@@ -1,0 +1,105 @@
+# This workflow will build a docker container, publish it to IBM Container Registry, and deploy it to IKS when there is a push to the "stable" branch.
+#
+# To configure this workflow:
+#
+# 1. Ensure that your repository contains a Dockerfile
+# 2. Setup secrets in your repository by going to settings: Create ICR_NAMESPACE and IBM_CLOUD_API_KEY
+# 3. Change the values for the IBM_CLOUD_REGION, REGISTRY_HOSTNAME, IMAGE_NAME, IKS_CLUSTER, DEPLOYMENT_NAME, and PORT
+
+name: Build and Deploy to IKS
+
+on:
+  push:
+    branches: [ "stable" ]
+
+# Environment variables available to all jobs and steps in this workflow
+env:
+  GITHUB_SHA: ${{ github.sha }}
+  IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+  IBM_CLOUD_REGION: us-south
+  ICR_NAMESPACE: ${{ secrets.ICR_NAMESPACE }}
+  REGISTRY_HOSTNAME: us.icr.io
+  IMAGE_NAME: iks-test
+  IKS_CLUSTER: example-iks-cluster-name-or-id
+  DEPLOYMENT_NAME: iks-test
+  PORT: 5001
+
+jobs:
+  setup-build-publish-deploy:
+    name: Setup, Build, Publish, and Deploy
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # Download and Install IBM Cloud CLI
+    - name: Install IBM Cloud CLI
+      run: |
+        curl -fsSL https://clis.cloud.ibm.com/install/linux | sh
+        ibmcloud --version
+        ibmcloud config --check-version=false
+        ibmcloud plugin install -f kubernetes-service
+        ibmcloud plugin install -f container-registry
+
+    # Authenticate with IBM Cloud CLI
+    - name: Authenticate with IBM Cloud CLI
+      run: |
+        ibmcloud login --apikey "${IBM_CLOUD_API_KEY}" -r "${IBM_CLOUD_REGION}" -g default
+        ibmcloud cr region-set "${IBM_CLOUD_REGION}"
+        ibmcloud cr login
+
+    # Build the Docker image
+    - name: Build with Docker
+      run: |
+        docker build -t "$REGISTRY_HOSTNAME"/"$ICR_NAMESPACE"/"$IMAGE_NAME":"$GITHUB_SHA" \
+          --build-arg GITHUB_SHA="$GITHUB_SHA" \
+          --build-arg GITHUB_REF="$GITHUB_REF" .
+
+    # Push the image to IBM Container Registry
+    - name: Push the image to ICR
+      run: |
+        docker push $REGISTRY_HOSTNAME/$ICR_NAMESPACE/$IMAGE_NAME:$GITHUB_SHA
+
+    # Deploy the Docker image to the IKS cluster
+    - name: Deploy to IKS
+      run: |
+        ibmcloud ks cluster config --cluster $IKS_CLUSTER
+        kubectl config current-context
+        kubectl create deployment $DEPLOYMENT_NAME --image=$REGISTRY_HOSTNAME/$ICR_NAMESPACE/$IMAGE_NAME:$GITHUB_SHA --dry-run -o yaml > deployment.yaml
+        kubectl apply -f deployment.yaml
+        kubectl rollout status deployment/$DEPLOYMENT_NAME
+        kubectl create service loadbalancer $DEPLOYMENT_NAME --tcp=80:$PORT --dry-run -o yaml > service.yaml
+        kubectl apply -f service.yaml
+        kubectl get services -o wide
+            - ชื่อ: ตั้งค่าสภาพแวดล้อม Node.js
+  ใช้: actions/setup-node@v6.0.0
+  กับ:
+    # ตั้งค่า always-auth ใน npmrc
+    always-auth: # ตัวเลือก ค่าเริ่มต้นคือ false
+    # เวอร์ชัน รายละเอียดของเวอร์ชันที่จะใช้ ตัวอย่าง: 12.x, 10.15.1, >=10.15.0
+    เวอร์ชันโหนด: # ตัวเลือก
+    # ไฟล์ที่มีข้อมูลจำเพาะของเวอร์ชันที่จะใช้ ตัวอย่าง: package.json, .nvmrc, .node-version, .tool-versions
+    ไฟล์ node-version: # ตัวเลือก
+    # สถาปัตยกรรมเป้าหมายสำหรับ Node ที่จะใช้ ตัวอย่าง: x86, x64 จะใช้สถาปัตยกรรมระบบเป็นค่าเริ่มต้น
+    สถาปัตยกรรม: # ตัวเลือก
+    # ตั้งค่าตัวเลือกนี้หากคุณต้องการให้การดำเนินการตรวจสอบเวอร์ชันล่าสุดที่มีอยู่ซึ่งตรงตามข้อกำหนดเวอร์ชัน
+    ตรวจสอบล่าสุด: # ตัวเลือก
+    # รีจิสทรีเสริมสำหรับการตั้งค่าการพิสูจน์ตัวตน จะตั้งค่ารีจิสทรีในไฟล์ .npmrc และ .yarnrc ระดับโปรเจกต์ และตั้งค่าการพิสูจน์ตัวตนเพื่ออ่านข้อมูลจาก env.NODE_AUTH_TOKEN
+    registry-url: # ตัวเลือก
+    # ขอบเขตเสริมสำหรับการตรวจสอบสิทธิ์กับรีจิสทรีที่มีขอบเขต จะถูกส่งกลับไปยังเจ้าของที่เก็บเมื่อใช้ GitHub Packages Registry (https://npm.pkg.github.com/)
+    ขอบเขต: # ตัวเลือก
+    # ใช้เพื่อดึงข้อมูลการแจกจ่ายโหนดจากเวอร์ชันโหนด เนื่องจากมีค่าเริ่มต้น จึงมักไม่ได้กำหนดค่านี้โดยผู้ใช้ เมื่อรันการดำเนินการนี้บน github.com ค่าเริ่มต้นก็เพียงพอแล้ว เมื่อรันบน GHES คุณสามารถส่งโทเค็นการเข้าถึงส่วนบุคคลสำหรับ github.com ได้หากคุณประสบปัญหาการจำกัดอัตรา
+    โทเค็น: # ตัวเลือก ค่าเริ่มต้นคือ ${{ github.server_url == 'https://github.com' && github.token || '' }}
+    # ใช้เพื่อระบุตัวจัดการแพ็กเกจสำหรับการแคชในไดเร็กทอรีเริ่มต้น ค่าที่รองรับ: npm, yarn, pnpm
+    แคช: # ตัวเลือก
+    # ตั้งค่าเป็น false เพื่อปิดใช้งานการแคชอัตโนมัติ โดยค่าเริ่มต้น การแคชจะถูกเปิดใช้งานเมื่อ devEngines.packageManager หรือฟิลด์ packageManager ระดับบนสุดใน package.json ระบุ npm เป็นตัวจัดการแพ็กเกจ
+    package-manager-cache: # ตัวเลือก ค่าเริ่มต้นคือ true
+    # ใช้เพื่อระบุเส้นทางไปยังไฟล์การอ้างอิง: package-lock.json, yarn.lock เป็นต้น รองรับไวด์การ์ดหรือรายชื่อไฟล์สำหรับการแคชการอ้างอิงหลายรายการ
+    เส้นทางการพึ่งพาแคช: # ตัวเลือก
+    # ใช้เพื่อระบุมิเรอร์ทางเลือกในการดาวน์โหลดไบนารี Node.js จาก
+    กระจก: # ตัวเลือก
+    # โทเค็นที่ใช้เป็นส่วนหัวการอนุญาตเมื่อดึงข้อมูลจากมิเรอร์
+    โทเค็นกระจก: # ตัวเลือก
+          
